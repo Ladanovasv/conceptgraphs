@@ -39,7 +39,7 @@ def main(args):
 
     with gzip.open(meta_path, "rb") as f:
         meta_info = pickle.load(f)
-        
+
     cfg = meta_info["cfg"]
     class_names = meta_info["class_names"]
     class_colors = meta_info["class_colors"]
@@ -70,20 +70,21 @@ def main(args):
         dtype=torch.float,
     )
     cam_K = dataset.get_cam_K()
-    
+
     color_path = dataset.color_paths[0]
     image_pil = Image.open(color_path)
-    
+
     # Create the visualization
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(
         window_name = "Mapping",
         width = image_pil.width,
         height = image_pil.height,
+        visible=False
     )
     
     view_ctrl = vis.get_view_control()
-    view_ctrl.change_field_of_view(10)
+    #view_ctrl.change_field_of_view(10)
     camera_param = view_ctrl.convert_to_pinhole_camera_parameters()
     
     main.show_bg = True
@@ -97,7 +98,7 @@ def main(args):
     }
     
     i = 0
-    for i in trange(len(frame_paths)):
+    for i in trange(len(dataset.color_paths)):
         color_path = dataset.color_paths[i]
         image_pil = Image.open(color_path)
         image_rgb = np.array(image_pil)
@@ -124,6 +125,7 @@ def main(args):
         )
         
         frame_class_names = gobs['classes']
+
         frame_classid_to_svcolor = [
             class_name_to_sv_color[class_name]
             for class_name in frame_class_names
@@ -141,13 +143,77 @@ def main(args):
                 instance_random_color=False,
             )
 
+        render_rgb = np.ones_like(image_rgb)
+        render_class = np.ones_like(image_class)
+        
+        result_frames_sep["image_rgb"].append(image_rgb)
+        result_frames_sep["image_class"].append(image_class)
+        result_frames_sep["render_rgb"].append((render_rgb * 255).astype(np.uint8))
+        result_frames_sep["render_class"].append((render_class * 255).astype(np.uint8))
+        
+        # Stack the two renders side-by-side, on the bottom of the image and annotated image
+        image_stack = np.concatenate([image_rgb, image_class], axis=1)
+        render_stack = np.concatenate([render_rgb, render_class], axis=1)
+        render_stack = (render_stack * 255).astype(np.uint8)
+        vis_stack = np.concatenate([image_stack, render_stack], axis=0)
+
+        result_frames.append(vis_stack)
+
+
+    for i in trange(len(frame_paths)):
+        frame_path = frame_paths[i].split("/")[-1].split(".")[0]
+        idx = int(frame_path)
+        color_path = dataset.color_paths[idx]
+        image_pil = Image.open(color_path)
+        image_rgb = np.array(image_pil)
+        
+        color_path = Path(color_path)
+        detections_path = color_path.parent.parent / cfg.detection_folder_name / color_path.name
+        detections_path = detections_path.with_suffix(".pkl.gz")
+        color_path = str(color_path)
+        detections_path = str(detections_path)
+        
+        # Load the detection results at this frame
+        with gzip.open(detections_path, "rb") as f:
+            gobs = pickle.load(f)
+            
+        # Filter out the objects as performed during the mapping process
+        gobs = filter_gobs(cfg, gobs, image_rgb)
+        
+        # Annotate the image with the remaining detection results
+        detections = Detections(
+            xyxy = gobs['xyxy'],
+            confidence = gobs['confidence'],
+            class_id = gobs['class_id'],
+            mask = gobs['mask'],
+        )
+        
+        frame_class_names = gobs['classes']
+
+        frame_classid_to_svcolor = [
+            class_name_to_sv_color[class_name]
+            for class_name in frame_class_names
+        ]
+        frame_color_palette = ColorPalette(frame_classid_to_svcolor)
+        if color_mode_instance:
+            image_class, labels = vis_result_fast(
+                image_rgb, detections, frame_class_names,
+                instance_random_color=True,
+                draw_bbox=False,
+            )
+        else:
+            image_class, labels = vis_result_fast(
+                image_rgb, detections, frame_class_names, frame_color_palette,
+                instance_random_color=False,
+            )
         # Load the mapping results up to this frame
         with gzip.open(frame_paths[i], "rb") as f:
             frame = pickle.load(f)
             
         if i > 0:
             vis.clear_geometries()
-            
+        
+        
         camera_pose = frame["camera_pose"]
         
         objects = MapObjectList()
@@ -173,14 +239,14 @@ def main(args):
                 vis.add_geometry(geom, reset_bounding_box = i<2)
         
         camera_param.extrinsic = np.linalg.inv(to_numpy(camera_pose))
-        view_ctrl.convert_from_pinhole_camera_parameters(camera_param)
+        view_ctrl.convert_from_pinhole_camera_parameters(camera_param, True)
         view_ctrl.camera_local_translate(forward=-0.4, right=0.0, up=0.0)
         vis.poll_events()
         vis.update_renderer()
         
-        render_rgb = vis.capture_screen_float_buffer(False)
+        render_rgb = vis.capture_screen_float_buffer(True)
         render_rgb = np.asarray(render_rgb)
-        
+
         # Then render the objects in class-coded colors
         if color_mode_instance:
             objects.color_by_instance()
@@ -201,12 +267,12 @@ def main(args):
                 vis.add_geometry(geom, reset_bounding_box = i<2)
         
         camera_param.extrinsic = np.linalg.inv(to_numpy(camera_pose))
-        view_ctrl.convert_from_pinhole_camera_parameters(camera_param)
+        view_ctrl.convert_from_pinhole_camera_parameters(camera_param, True)
         view_ctrl.camera_local_translate(forward=-0.4, right=0.0, up=0.0)
         vis.poll_events()
         vis.update_renderer()
         
-        render_class = vis.capture_screen_float_buffer(False)
+        render_class = vis.capture_screen_float_buffer(True)
         render_class = np.asarray(render_class)
         
         # plt.subplot(2, 2, 1)
@@ -219,10 +285,10 @@ def main(args):
         # plt.imshow(render_class)
         # plt.show()
         
-        result_frames_sep["image_rgb"].append(image_rgb)
-        result_frames_sep["image_class"].append(image_class)
-        result_frames_sep["render_rgb"].append((render_rgb * 255).astype(np.uint8))
-        result_frames_sep["render_class"].append((render_class * 255).astype(np.uint8))
+        result_frames_sep["image_rgb"][idx] = image_rgb
+        result_frames_sep["image_class"][idx] = image_class
+        result_frames_sep["render_rgb"][idx] = (render_rgb * 255).astype(np.uint8)
+        result_frames_sep["render_class"][idx] = (render_class * 255).astype(np.uint8)
         
         # Stack the two renders side-by-side, on the bottom of the image and annotated image
         image_stack = np.concatenate([image_rgb, image_class], axis=1)
@@ -235,16 +301,16 @@ def main(args):
         # plt.axis("off")
         # plt.show()
         
-        result_frames.append(vis_stack)
+        result_frames[idx] = vis_stack
         
     vis.destroy_window()
     
     # Save the result as a video
-    imageio.mimwrite(video_save_path, result_frames, fps=10)
+    imageio.mimwrite(video_save_path, result_frames, fps=2)
     
     for k, v in result_frames_sep.items():
         sep_video_save_path = sep_video_save_folder / f"{k}.mp4"
-        imageio.mimwrite(sep_video_save_path, v, fps=10)
+        imageio.mimwrite(sep_video_save_path, v, fps=1)
 
 if __name__ == "__main__":
     parser = get_parser()

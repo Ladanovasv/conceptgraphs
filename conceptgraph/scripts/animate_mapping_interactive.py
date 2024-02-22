@@ -113,8 +113,9 @@ def main(args):
     # Create the visualization
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window()
-    
+    print(vis)
     view_ctrl = vis.get_view_control()
+    print(view_ctrl)
     camera_param = view_ctrl.convert_to_pinhole_camera_parameters()
     
     main.color_mode = COLOR_MODE.RGB

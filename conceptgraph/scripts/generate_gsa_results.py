@@ -47,6 +47,7 @@ else:
     
 import sys
 TAG2TEXT_PATH = os.path.join(GSA_PATH, "Tag2Text")
+print(TAG2TEXT_PATH)
 EFFICIENTSAM_PATH = os.path.join(GSA_PATH, "EfficientSAM")
 sys.path.append(GSA_PATH) # This is needed for the following imports in this file
 sys.path.append(TAG2TEXT_PATH) # This is needed for some imports in the Tag2Text files
@@ -57,18 +58,18 @@ try:
     import torchvision.transforms as TS
 except ImportError as e:
     print("Tag2text sub-package not found. Please check your GSA_PATH. ")
-    raise e
+    # raise e
 
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
     
 # GroundingDINO config and checkpoint
 GROUNDING_DINO_CONFIG_PATH = os.path.join(GSA_PATH, "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py")
-GROUNDING_DINO_CHECKPOINT_PATH = os.path.join(GSA_PATH, "./groundingdino_swint_ogc.pth")
+GROUNDING_DINO_CHECKPOINT_PATH = os.path.join(GSA_PATH, "GroundingDINO/groundingdino_swint_ogc.pth")
 
 # Segment-Anything checkpoint
 SAM_ENCODER_VERSION = "vit_h"
-SAM_CHECKPOINT_PATH = os.path.join(GSA_PATH, "./sam_vit_h_4b8939.pth")
+SAM_CHECKPOINT_PATH = os.path.join(GSA_PATH, "segment_anything/sam_vit_h_4b8939.pth")
 
 # Tag2Text checkpoint
 TAG2TEXT_CHECKPOINT_PATH = os.path.join(TAG2TEXT_PATH, "./tag2text_swin_14m.pth")
@@ -118,7 +119,8 @@ def get_parser() -> argparse.ArgumentParser:
     
     parser.add_argument("--save_video", action="store_true")
     
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--device_0", type=str, default="cuda:0")
+    parser.add_argument("--device_1", type=str, default="cuda:1")
     
     parser.add_argument("--use_slow_vis", action="store_true", 
                         help="If set, use vis_result_slow_caption. Only effective when using ram/tag2text. ")
@@ -162,13 +164,13 @@ def compute_clip_features(image, detections, clip_model, clip_preprocess, clip_t
         cropped_image = image.crop((x_min, y_min, x_max, y_max))
         
         # Get the preprocessed image for clip from the crop 
-        preprocessed_image = clip_preprocess(cropped_image).unsqueeze(0).to("cuda")
+        preprocessed_image = clip_preprocess(cropped_image).unsqueeze(0).to(device)
 
         crop_feat = clip_model.encode_image(preprocessed_image)
         crop_feat /= crop_feat.norm(dim=-1, keepdim=True)
         
         class_id = detections.class_id[idx]
-        tokenized_text = clip_tokenizer([classes[class_id]]).to("cuda")
+        tokenized_text = clip_tokenizer([classes[class_id]]).to(device)
         text_feat = clip_model.encode_text(tokenized_text)
         text_feat /= text_feat.norm(dim=-1, keepdim=True)
         
@@ -354,21 +356,22 @@ def main(args: argparse.Namespace):
     grounding_dino_model = Model(
         model_config_path=GROUNDING_DINO_CONFIG_PATH, 
         model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH, 
-        device=args.device
+        device="cpu"
+        # device=args.device
     )
 
     ### Initialize the SAM model ###
     if args.class_set == "none":
-        mask_generator = get_sam_mask_generator(args.sam_variant, args.device)
+        mask_generator = get_sam_mask_generator(args.sam_variant, args.device_0)
     else:
-        sam_predictor = get_sam_predictor(args.sam_variant, args.device)
+        sam_predictor = get_sam_predictor(args.sam_variant, args.device_0)
     
     ###
     # Initialize the CLIP model
     clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
         "ViT-H-14", "laion2b_s32b_b79k"
     )
-    clip_model = clip_model.to(args.device)
+    clip_model = clip_model.to(args.device_1)
     clip_tokenizer = open_clip.get_tokenizer("ViT-H-14")
     
     # Initialize the dataset
@@ -539,9 +542,10 @@ def main(args: argparse.Namespace):
                 mask=mask,
             )
             image_crops, image_feats, text_feats = compute_clip_features(
-                image_rgb, detections, clip_model, clip_preprocess, clip_tokenizer, classes, args.device)
+                image_rgb, detections, clip_model, clip_preprocess, clip_tokenizer, classes, args.device_1)
 
             ### Visualize results ###
+            # print(len(list(detections)), len(list(detections)[0]))
             annotated_image, labels = vis_result_fast(
                 image, detections, classes, instance_random_color=True)
             

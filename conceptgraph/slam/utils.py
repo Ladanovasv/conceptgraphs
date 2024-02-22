@@ -206,19 +206,35 @@ def merge_obj2_into_obj1(cfg, obj1, obj2, run_dbscan=True):
     obj1['bbox'].color = [0,1,0]
     
     # merge clip ft
+
     obj1['clip_ft'] = (obj1['clip_ft'] * n_obj1_det +
-                       obj2['clip_ft'] * n_obj2_det) / (
-                       n_obj1_det + n_obj2_det)
+                    obj2['clip_ft'] * n_obj2_det) / (
+                    n_obj1_det + n_obj2_det)
     obj1['clip_ft'] = F.normalize(obj1['clip_ft'], dim=0)
 
     # merge text_ft
     obj2['text_ft'] = to_tensor(obj2['text_ft'], cfg.device)
     obj1['text_ft'] = to_tensor(obj1['text_ft'], cfg.device)
     obj1['text_ft'] = (obj1['text_ft'] * n_obj1_det +
-                       obj2['text_ft'] * n_obj2_det) / (
-                       n_obj1_det + n_obj2_det)
+                    obj2['text_ft'] * n_obj2_det) / (
+                    n_obj1_det + n_obj2_det)
     obj1['text_ft'] = F.normalize(obj1['text_ft'], dim=0)
-    
+
+    # if cfg["merge_clip"] == "slice_time":
+    #     obj1['clip_ft'] = (obj1['clip_ft'] * n_obj1_det * 0.5 +
+    #                     obj2['clip_ft'] * n_obj2_det) / (
+    #                     n_obj1_det * 0.5 + n_obj2_det)
+    #     obj1['clip_ft'] = F.normalize(obj1['clip_ft'], dim=0)
+
+    #     # merge text_ft
+    #     obj2['text_ft'] = to_tensor(obj2['text_ft'], cfg.device)
+    #     obj1['text_ft'] = to_tensor(obj1['text_ft'], cfg.device)
+    #     obj1['text_ft'] = (obj1['text_ft'] * n_obj1_det * 0.5 +
+    #                     obj2['text_ft'] * n_obj2_det) / (
+    #                     n_obj1_det * 0.5 + n_obj2_det)
+    #     obj1['text_ft'] = F.normalize(obj1['text_ft'], dim=0)
+
+    # if 
     return obj1
 
 def compute_overlap_matrix(cfg, objects: MapObjectList):

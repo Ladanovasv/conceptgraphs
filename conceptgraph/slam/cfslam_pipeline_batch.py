@@ -151,7 +151,7 @@ def main(cfg : DictConfig):
     # For visualization
     if cfg.vis_render:
         view_param = o3d.io.read_pinhole_camera_parameters(cfg.render_camera_path)
-            
+        print(cfg.render_camera_path)    
         obj_renderer = OnlineObjectRenderer(
             view_param = view_param,
             base_objects = None, 

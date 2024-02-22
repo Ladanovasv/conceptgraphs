@@ -56,10 +56,11 @@ class OnlineObjectRenderer():
         
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window(
-            width = self.window_width,
-            height = self.window_height,
+            width = 680,
+            height = 1200,
         )
         
+        print(self.window_width, self.window_height)
         self.vis_ctrl = self.vis.get_view_control()
         self.vis_ctrl.convert_from_pinhole_camera_parameters(self.view_param)
         
@@ -213,8 +214,8 @@ def vis_result_fast(
     )
     labels = [
         f"{classes[class_id]} {confidence:0.2f}" 
-        for _, _, confidence, class_id, _ 
-        in detections]
+        for _, _, confidence, class_id, _, _ 
+        in list(detections)]
     
     if instance_random_color:
         # generate random colors for each segmentation

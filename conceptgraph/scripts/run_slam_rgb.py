@@ -103,6 +103,7 @@ def main(args: argparse.Namespace):
             _pose.unsqueeze(0).unsqueeze(0),
             embeddings = _embedding,
             confidence_image = _confidence,
+            device = args.device
         )
         
         pointclouds, _ = slam.step(pointclouds, frame_cur, frame_prev)

@@ -14,7 +14,7 @@ detection_folder_name: gsa_detections_${gsa_variant}
 det_vis_folder_name: gsa_vis_${gsa_variant}
 color_file_name: gsa_classes_${gsa_variant}
 
-device: cuda
+device: cuda:0
 
 use_iou: !!bool True
 spatial_sim_type: iou # "iou", "giou", "overlap"
@@ -35,7 +35,7 @@ contain_mismatch_penalty: 0.5
 mask_area_threshold: 25 # mask with pixel area less than this will be skipped
 mask_conf_threshold: 0.2 # mask with lower confidence score will be skipped
 max_bbox_area_ratio: 1.0 # boxes with larger areas than this will be skipped
-skip_bg: !!bool True
+skip_bg: !!bool False
 min_points_threshold: 16 # projected and sampled pcd with less points will be skipped
 
 # point cloud processing
@@ -64,9 +64,9 @@ save_pcd: !!bool True
 save_suffix: exp
 
 # Visualization
-vis_render: !!bool False           # If True, the objects will be rendered to a video. 
-debug_render: !!bool False     # If True, the vis.run() will be called and used for debugging
-class_agnostic: !!bool False   # If set, the color will be set by instance, rather than most common class
+vis_render: !!bool True           # If True, the objects will be rendered to a video. 
+debug_render: !!bool True     # If True, the vis.run() will be called and used for debugging
+class_agnostic: !!bool True   # If set, the color will be set by instance, rather than most common class
 
-save_objects_all_frames: !!bool False   # If True, the objects at all timesteps will be saved for future animation
+save_objects_all_frames: !!bool True   # If True, the objects at all timesteps will be saved for future animation
 render_camera_path: "replica_room0.json"

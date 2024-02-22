@@ -10,7 +10,6 @@ import pickle as pkl
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import List, Literal, Union
 from textwrap import wrap
 
@@ -38,11 +37,6 @@ from transformers import logging as hf_logging
 
 torch.autograd.set_grad_enabled(False)
 hf_logging.set_verbosity_error()
-
-# Import OpenAI API
-import openai
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 @dataclass
@@ -83,6 +77,9 @@ class ProgramArgs:
 
     # Masking option
     masking_option: Literal["blackout", "red_outline", "none"] = "none"
+
+    #llm type
+    llm_type: str = "vicuna"
 
 def load_scene_map(args, scene_map):
     """
@@ -257,7 +254,6 @@ def plot_images_with_captions(images, captions, confidences, low_confidences, ma
     plt.close()
 
 
-
 def extract_node_captions(args):
     from conceptgraph.llava.llava_model import LLaVaChat
 
@@ -286,20 +282,14 @@ def extract_node_captions(args):
         class_names = json.load(f)
     print(class_names)
 
-    # Creating a namespace object to pass args to the LLaVA chat object
-    chat_args = SimpleNamespace()
-    chat_args.model_path = os.getenv("LLAVA_MODEL_PATH")
-    chat_args.conv_mode = "v0_mmtag" # "multimodal"
-    chat_args.num_gpus = 1
-
     # rich console for pretty printing
     console = rich.console.Console()
 
     # Initialize LLaVA chat
-    chat = LLaVaChat(chat_args.model_path, chat_args.conv_mode, chat_args.num_gpus)
+    chat = LLaVaChat()
     # chat = LLaVaChat(chat_args)
     print("LLaVA chat initialized...")
-    query = "Describe the central object in the image."
+    query = "Describe the central object in the image whish was in room."
     # query = "Describe the object in the image that is outlined in red."
 
     # Directories to save features and captions
@@ -316,6 +306,18 @@ def extract_node_captions(args):
         conf = obj["conf"]
         conf = np.array(conf)
         idx_most_conf = np.argsort(conf)[::-1]
+        # print(obj)
+        conf = np.array(obj["pixel_area"])
+        idx_most_conf = np.argsort(conf)[::-1]
+        # print(conf[idx_most_conf[:10]])
+        # if args['conf'] == 'mask_area':
+        #     conf = np.array(obj["mask_area"])
+        # if args['conf'] == 'xyxy':
+        #     centers_image = np.array([320, 240])
+        #     xyxy = np.array(obj["xyxy"])
+        #     cx = np.abs((xyxy[:, 0] + xyxy[:, 2])/2 - centers_image[0])
+        #     cy = np.abs((xyxy[:, 1] + xyxy[:, 3])/2 - centers_image[1])
+        #     conf = (cx * cx + cy * cy) ** 0.5
 
         features = []
         captions = []
@@ -360,9 +362,9 @@ def extract_node_captions(args):
                 low_confidences.append(False)
 
             # image_tensor = chat.image_processor.preprocess(image_crop, return_tensors="pt")["pixel_values"][0]
-            image_tensor = chat.image_processor.preprocess(image_crop_modified, return_tensors="pt")["pixel_values"][0]
+            image_features = chat.preprocess_image([image_crop_modified])
 
-            image_features = chat.encode_image(image_tensor[None, ...].half().cuda())
+            #image_features = chat.encode_image(image_tensor[None, ...].half().cuda())
             features.append(image_features.detach().cpu())
 
             chat.reset()
@@ -417,9 +419,22 @@ def save_json_to_file(json_str, filename):
 
 
 def refine_node_captions(args):
+    # Import OpenAI API
+
+    if args.llm_type == "gpt4":
+        import openai
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        from conceptgraph.scenegraph.GPTPrompt import GPTPrompt
+        gpt_messages = GPTPrompt().get_json()
+    elif args.llm_type == "vicuna":
+        import requests
+        from conceptgraph.scenegraph.Vicuna_prompt import VicunaPrompt
+        url = "http://127.0.0.1:8080/generate"
+    else:
+        raise NotImplementedError
+
     # NOTE: args.mapfile is in cfslam format
     from conceptgraph.slam.slam_classes import MapObjectList
-    from conceptgraph.scenegraph.GPTPrompt import GPTPrompt
 
     # Load the captions for each segment
     caption_file = Path(args.cachedir) / "cfslam_llava_captions.json"
@@ -435,9 +450,6 @@ def refine_node_captions(args):
     # Load the scene map
     scene_map = MapObjectList()
     load_scene_map(args, scene_map)
-    
-    # load the prompt
-    gpt_messages = GPTPrompt().get_json()
 
     TIMEOUT = 25  # Timeout in seconds
 
@@ -468,17 +480,36 @@ def refine_node_captions(args):
         preds = json.dumps(_dict, indent=0)
 
         start_time = time.time()
-    
-        curr_chat_messages = gpt_messages[:]
-        curr_chat_messages.append({"role": "user", "content": preds})
-        chat_completion = openai.ChatCompletion.create(
-            # model="gpt-3.5-turbo",
-            model="gpt-4",
-            messages=curr_chat_messages,
-            timeout=TIMEOUT,  # Timeout in seconds
-        )
+
+        if args.llm_type == "gpt4":
+            curr_chat_messages = gpt_messages[:]
+            curr_chat_messages.append({"role": "user", "content": preds})
+            chat_completion = openai.ChatCompletion.create(
+                # model="gpt-3.5-turbo",
+                model="gpt-4",
+                messages=curr_chat_messages,
+                timeout=TIMEOUT,  # Timeout in seconds
+            )
+        elif args.llm_type == "vicuna":
+            curr_chat_messages = VicunaPrompt + str(preds)
+            inputs = {"prompt": curr_chat_messages}
+            outputs = requests.post(url, json=inputs)
+            out = outputs.json()["text"]
+            out = out.replace('\n', '').replace('\\', "")[7:]
+            try:
+                out = eval(out)
+                _dict["response"] = out
+            except:
+                print("Can't parse")
+                _dict["response"] = "FAIL"
+                save_json_to_file(_dict, responses_savedir / f"{_caption['id']}.json")
+                responses.append(json.dumps(_dict))
+                continue
+        else:
+            raise NotImplementedError
+        
         elapsed_time = time.time() - start_time
-        if elapsed_time > TIMEOUT:
+        if args.llm_type == "gpt4" and elapsed_time > TIMEOUT:
             print("Timed out exceeded!")
             _dict["response"] = "FAIL"
             # responses.append('{"object_tag": "FAIL"}')
@@ -488,14 +519,18 @@ def refine_node_captions(args):
             continue
         
         # count unsucessful responses
-        if "invalid" in chat_completion["choices"][0]["message"]["content"].strip("\n"):
+        if args.llm_type == "gpt4" and \
+            "invalid" in chat_completion["choices"][0]["message"]["content"].strip("\n"):
             unsucessful_responses += 1
-            
+        
         # print output
-        prjson([{"role": "user", "content": preds}])
-        print(chat_completion["choices"][0]["message"]["content"])
-        print(f"Unsucessful responses so far: {unsucessful_responses}")
-        _dict["response"] = chat_completion["choices"][0]["message"]["content"].strip("\n")
+        if args.llm_type == "gpt4":
+            prjson([{"role": "user", "content": preds}])
+            print(chat_completion["choices"][0]["message"]["content"])
+            print(f"Unsucessful responses so far: {unsucessful_responses}")
+            _dict["response"] = chat_completion["choices"][0]["message"]["content"].strip("\n")
+        elif args.llm_type == "vicuna":
+            print(out)
         
         # save the response
         responses.append(json.dumps(_dict))
@@ -552,6 +587,17 @@ def extract_object_tag_from_json_str(json_str):
 
 
 def build_scenegraph(args):
+    if args.llm_type == "gpt4":
+    # Import OpenAI API
+        import openai
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+    elif args.llm_type == "vicuna":
+        import requests
+        url = "http://127.0.0.1:8080/generate"
+    else:
+        raise NotImplementedError
+
+
     from conceptgraph.slam.slam_classes import MapObjectList
     from conceptgraph.slam.utils import compute_overlap_matrix
 
@@ -570,14 +616,24 @@ def build_scenegraph(args):
             continue
         with open(response_dir / f"{idx}.json", "r") as f:
             _d = json.load(f)
-            try:
-                _d["response"] = json.loads(_d["response"])
-            except json.JSONDecodeError:
-                _d["response"] = {
-                    'summary': f'GPT4 json reply failed: Here is the invalid response {_d["response"]}',
-                    'possible_tags': ['possible_tag_json_failed'],
-                    'object_tag': 'invalid'
-                }
+            if args.llm_type == "vicuna":
+                if _d["response"] == "FAIL":
+                    print("json reply failed")
+                    _d["response"] = {
+                        'summary': f'Vicuna json reply failed: Here is the invalid response {_d["response"]}',
+                        'possible_tags': ['possible_tag_json_failed'],
+                        'object_tag': 'invalid'
+                    }
+            elif args.llm_type == "gpt4":
+                try:
+                    _d["response"] = json.loads(_d["response"])
+                except json.JSONDecodeError:
+                    print("json reply failed")
+                    _d["response"] = {
+                        'summary': f'GPT4 json reply failed: Here is the invalid response {_d["response"]}',
+                        'possible_tags': ['possible_tag_json_failed'],
+                        'object_tag': 'invalid'
+                    }
             responses.append(_d)
             object_tags.append(_d["response"]["object_tag"])
 
@@ -695,7 +751,6 @@ def build_scenegraph(args):
             minimum_spanning_trees.append(_mst)
 
         TIMEOUT = 25  # timeout in seconds
-
         if not (Path(args.cachedir) / "cfslam_object_relations.json").exists():
             relation_queries = []
             for componentidx, component in enumerate(components):
@@ -750,31 +805,51 @@ def build_scenegraph(args):
                     Before producing the "object_relation" field, produce a "reason" field that explains why
                     the chosen "object_relation" field is the best.
                     """
+                    if args.llm_type == "vicuna":
+                        DEFAULT_PROMPT = """User: A chat between a curios user and an artificial intelegence assistant.\n""" + DEFAULT_PROMPT
 
-                    start_time = time.time()
-                    chat_completion = openai.ChatCompletion.create(
-                        # model="gpt-3.5-turbo",
-                        model="gpt-4",
-                        messages=[{"role": "user", "content": DEFAULT_PROMPT + "\n\n" + input_json_str}],
-                        timeout=TIMEOUT,  # Timeout in seconds
-                    )
-                    elapsed_time = time.time() - start_time
                     output_dict = input_dict
-                    if elapsed_time > TIMEOUT:
-                        print("Timed out exceeded!")
+                    if args.llm_type == "gpt4":
+                        start_time = time.time()
+                        chat_completion = openai.ChatCompletion.create(
+                            # model="gpt-3.5-turbo",
+                            model="gpt-4",
+                            messages=[{"role": "user", "content": DEFAULT_PROMPT + "\n\n" + input_json_str}],
+                            timeout=TIMEOUT,  # Timeout in seconds
+                        )
+                    
+                        elapsed_time = time.time() - start_time
+                        if elapsed_time > TIMEOUT:
+                            print("Timed out exceeded!")
+                            output_dict["object_relation"] = "FAIL"
+                            continue
+                        else:
+                            try:
+                                # Attempt to parse the output as a JSON
+                                chat_output_json = json.loads(chat_completion["choices"][0]["message"]["content"])
+                                # If the output is a valid JSON, then add it to the output dictionary
+                                output_dict["object_relation"] = chat_output_json["object_relation"]
+                                output_dict["reason"] = chat_output_json["reason"]
+                            except:
+                                output_dict["object_relation"] = "FAIL"
+                                output_dict["reason"] = "FAIL"
+                        relations.append(output_dict)
+                    elif args.llm_type == "vicuna":
+                        curr_chat_messages = DEFAULT_PROMPT + str(input_json_str) + "\n Assistant answer:"
+                        inputs = {"prompt": curr_chat_messages}
+                        outputs = requests.post(url, json=inputs)
                         output_dict["object_relation"] = "FAIL"
-                        continue
-                    else:
                         try:
-                            # Attempt to parse the output as a JSON
-                            chat_output_json = json.loads(chat_completion["choices"][0]["message"]["content"])
-                            # If the output is a valid JSON, then add it to the output dictionary
-                            output_dict["object_relation"] = chat_output_json["object_relation"]
-                            output_dict["reason"] = chat_output_json["reason"]
+                            out = eval(outputs.json()["text"].replace('\\', ""))
+                            print("Answer:")
+                            print(out)
+                            print("----")
+                            output_dict["object_relation"] = out["object_relation"]
+                            output_dict["reason"] = out["reason"]
                         except:
                             output_dict["object_relation"] = "FAIL"
                             output_dict["reason"] = "FAIL"
-                    relations.append(output_dict)
+                        relations.append(out)
 
                     # print(chat_completion["choices"][0]["message"]["content"])
 
