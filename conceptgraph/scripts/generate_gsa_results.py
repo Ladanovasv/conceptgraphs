@@ -46,34 +46,19 @@ else:
     raise ValueError("Please set the GSA_PATH environment variable to the path of the GSA repo. ")
     
 import sys
-TAG2TEXT_PATH = os.path.join(GSA_PATH, "Tag2Text")
-print(TAG2TEXT_PATH)
+
 EFFICIENTSAM_PATH = os.path.join(GSA_PATH, "EfficientSAM")
 sys.path.append(GSA_PATH) # This is needed for the following imports in this file
-sys.path.append(TAG2TEXT_PATH) # This is needed for some imports in the Tag2Text files
 sys.path.append(EFFICIENTSAM_PATH)
-try:
-    from Tag2Text.models import tag2text
-    from Tag2Text import inference_tag2text, inference_ram
-    import torchvision.transforms as TS
-except ImportError as e:
-    print("Tag2text sub-package not found. Please check your GSA_PATH. ")
-    # raise e
+
 
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
-    
-# GroundingDINO config and checkpoint
-GROUNDING_DINO_CONFIG_PATH = os.path.join(GSA_PATH, "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py")
-GROUNDING_DINO_CHECKPOINT_PATH = os.path.join(GSA_PATH, "GroundingDINO/groundingdino_swint_ogc.pth")
 
 # Segment-Anything checkpoint
 SAM_ENCODER_VERSION = "vit_h"
 SAM_CHECKPOINT_PATH = os.path.join(GSA_PATH, "segment_anything/sam_vit_h_4b8939.pth")
 
-# Tag2Text checkpoint
-TAG2TEXT_CHECKPOINT_PATH = os.path.join(TAG2TEXT_PATH, "./tag2text_swin_14m.pth")
-RAM_CHECKPOINT_PATH = os.path.join(TAG2TEXT_PATH, "./ram_swin_large_14m.pth")
 
 FOREGROUND_GENERIC_CLASSES = [
     "item", "furniture", "object", "electronics", "wall decoration", "door"
@@ -353,12 +338,7 @@ def process_ai2thor_classes(classes: List[str], add_classes:List[str]=[], remove
     
 def main(args: argparse.Namespace):
     ### Initialize the Grounding DINO model ###
-    grounding_dino_model = Model(
-        model_config_path=GROUNDING_DINO_CONFIG_PATH, 
-        model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH, 
-        device="cpu"
-        # device=args.device
-    )
+   
 
     ### Initialize the SAM model ###
     if args.class_set == "none":
@@ -368,8 +348,10 @@ def main(args: argparse.Namespace):
     
     ###
     # Initialize the CLIP model
+    open_clip_model = "ViT-H-14"
+    open_clip_pretrained_dataset = "laion2b_s32b_b79k"
     clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
-        "ViT-H-14", "laion2b_s32b_b79k"
+        "ViT-H-14", "laion2b_s32b_b79k", cache_dir="/home/docker_user/concept-graphs/conceptgraph/CLIP-ViT-H-14-laion2B-s32B-b79K"
     )
     clip_model = clip_model.to(args.device_1)
     clip_tokenizer = open_clip.get_tokenizer("ViT-H-14")
@@ -390,68 +372,7 @@ def main(args: argparse.Namespace):
 
     global_classes = set()
     
-    if args.class_set == "scene":
-        # Load the object meta information
-        obj_meta_path = args.dataset_root / args.scene_id / "obj_meta.json"
-        with open(obj_meta_path, "r") as f:
-            obj_meta = json.load(f)
-        # Get a list of object classes in the scene
-        classes = process_ai2thor_classes(
-            [obj["objectType"] for obj in obj_meta],
-            add_classes=[],
-            remove_classes=['wall', 'floor', 'room', 'ceiling']
-        )
-    elif args.class_set == "generic":
-        classes = FOREGROUND_GENERIC_CLASSES
-    elif args.class_set == "minimal":
-        classes = FOREGROUND_MINIMAL_CLASSES
-    elif args.class_set in ["tag2text", "ram"]:
-        ### Initialize the Tag2Text or RAM model ###
-        
-        if args.class_set == "tag2text":
-            # The class set will be computed by tag2text on each image
-            # filter out attributes and action categories which are difficult to grounding
-            delete_tag_index = []
-            for i in range(3012, 3429):
-                delete_tag_index.append(i)
-
-            specified_tags='None'
-            # load model
-            tagging_model = tag2text.tag2text_caption(pretrained=TAG2TEXT_CHECKPOINT_PATH,
-                                                    image_size=384,
-                                                    vit='swin_b',
-                                                    delete_tag_index=delete_tag_index)
-            # threshold for tagging
-            # we reduce the threshold to obtain more tags
-            tagging_model.threshold = 0.64 
-        elif args.class_set == "ram":
-            tagging_model = tag2text.ram(pretrained=RAM_CHECKPOINT_PATH,
-                                         image_size=384,
-                                         vit='swin_l')
-            
-        tagging_model = tagging_model.eval().to(args.device)
-        
-        # initialize Tag2Text
-        tagging_transform = TS.Compose([
-            TS.Resize((384, 384)),
-            TS.ToTensor(), 
-            TS.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225]),
-        ])
-        
-        classes = None
-    elif args.class_set == "none":
-        classes = ['item']
-    else:
-        raise ValueError("Unknown args.class_set: ", args.class_set)
-
-    if args.class_set not in ["ram", "tag2text"]:
-        print("There are total", len(classes), "classes to detect. ")
-    elif args.class_set == "none":
-        print("Skipping tagging and detection models. ")
-    else:
-        print(f"{args.class_set} will be used to detect classes. ")
-        
+    classes = ['item']
     save_name = f"{args.class_set}"
     if args.sam_variant != "sam": # For backward compatibility
         save_name += f"_{args.sam_variant}"
@@ -484,52 +405,7 @@ def main(args: argparse.Namespace):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # Convert to RGB color space
         image_pil = Image.fromarray(image_rgb)
         
-        ### Tag2Text ###
-        if args.class_set in ["ram", "tag2text"]:
-            raw_image = image_pil.resize((384, 384))
-            raw_image = tagging_transform(raw_image).unsqueeze(0).to(args.device)
-            
-            if args.class_set == "ram":
-                res = inference_ram.inference(raw_image , tagging_model)
-                caption="NA"
-            elif args.class_set == "tag2text":
-                res = inference_tag2text.inference(raw_image , tagging_model, specified_tags)
-                caption=res[2]
-
-            # Currently ", " is better for detecting single tags
-            # while ". " is a little worse in some case
-            text_prompt=res[0].replace(' |', ',')
-            
-            # Add "other item" to capture objects not in the tag2text captions. 
-            # Remove "xxx room", otherwise it will simply include the entire image
-            # Also hide "wall" and "floor" for now...
-            add_classes = ["other item"]
-            remove_classes = [
-                "room", "kitchen", "office", "house", "home", "building", "corner",
-                "shadow", "carpet", "photo", "shade", "stall", "space", "aquarium", 
-                "apartment", "image", "city", "blue", "skylight", "hallway", 
-                "bureau", "modern", "salon", "doorway", "wall lamp"
-            ]
-            bg_classes = ["wall", "floor", "ceiling"]
-
-            if args.add_bg_classes:
-                add_classes += bg_classes
-            else:
-                remove_classes += bg_classes
-
-            classes = process_tag_classes(
-                text_prompt, 
-                add_classes = add_classes,
-                remove_classes = remove_classes,
-            )
-            
-        # add classes to global classes
-        global_classes.update(classes)
         
-        if args.accumu_classes:
-            # Use all the classes that have been seen so far
-            classes = list(global_classes)
-            
         ### Detection and segmentation ###
         if args.class_set == "none":
             # Directly use SAM in dense sampling mode to get segmentation
@@ -550,58 +426,7 @@ def main(args: argparse.Namespace):
                 image, detections, classes, instance_random_color=True)
             
             cv2.imwrite(vis_save_path, annotated_image)
-        else:
-            # Using GroundingDINO to detect and SAM to segment
-            detections = grounding_dino_model.predict_with_classes(
-                image=image, # This function expects a BGR image...
-                classes=classes,
-                box_threshold=args.box_threshold,
-                text_threshold=args.text_threshold,
-            )
-            
-            if len(detections.class_id) > 0:
-                ### Non-maximum suppression ###
-                # print(f"Before NMS: {len(detections.xyxy)} boxes")
-                nms_idx = torchvision.ops.nms(
-                    torch.from_numpy(detections.xyxy), 
-                    torch.from_numpy(detections.confidence), 
-                    args.nms_threshold
-                ).numpy().tolist()
-                # print(f"After NMS: {len(detections.xyxy)} boxes")
-
-                detections.xyxy = detections.xyxy[nms_idx]
-                detections.confidence = detections.confidence[nms_idx]
-                detections.class_id = detections.class_id[nms_idx]
-                
-                # Somehow some detections will have class_id=-1, remove them
-                valid_idx = detections.class_id != -1
-                detections.xyxy = detections.xyxy[valid_idx]
-                detections.confidence = detections.confidence[valid_idx]
-                detections.class_id = detections.class_id[valid_idx]
-                
-                ### Segment Anything ###
-                detections.mask = get_sam_segmentation_from_xyxy(
-                    sam_predictor=sam_predictor,
-                    image=image_rgb,
-                    xyxy=detections.xyxy
-                )
-
-                # Compute and save the clip features of detections  
-                image_crops, image_feats, text_feats = compute_clip_features(
-                    image_rgb, detections, clip_model, clip_preprocess, clip_tokenizer, classes, args.device)
-            else:
-                image_crops, image_feats, text_feats = [], [], []
-            
-            ### Visualize results ###
-            annotated_image, labels = vis_result_fast(image, detections, classes)
-            
-            # save the annotated grounded-sam image
-            if args.class_set in ["ram", "tag2text"] and args.use_slow_vis:
-                annotated_image_caption = vis_result_slow_caption(
-                    image_rgb, detections.mask, detections.xyxy, labels, caption, text_prompt)
-                Image.fromarray(annotated_image_caption).save(vis_save_path)
-            else:
-                cv2.imwrite(vis_save_path, annotated_image)
+        
         
         if args.save_video:
             frames.append(annotated_image)

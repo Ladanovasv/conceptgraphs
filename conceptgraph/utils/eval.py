@@ -5,7 +5,7 @@ import torch
 def compute_pred_gt_associations(pred, gt):
     # pred: predicted pointcloud
     # gt: GT pointcloud
-    from chamferdist.chamfer import knn_points
+    from pytorch3d.ops import ball_query, knn_points
 
     # pred = pointclouds.points_padded.cuda().contiguous()
     # gt = pts_gt.unsqueeze(0).cuda().contiguous()

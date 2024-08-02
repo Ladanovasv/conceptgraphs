@@ -26,7 +26,7 @@ from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 from tqdm import tqdm, trange
 from transformers import logging as hf_logging
 
-# from mappingutils import (
+# from mapping.utils import (
 #     MapObjectList,
 #     compute_3d_giou_accuracte_batch,
 #     compute_3d_iou_accuracte_batch,
@@ -38,6 +38,7 @@ from transformers import logging as hf_logging
 torch.autograd.set_grad_enabled(False)
 hf_logging.set_verbosity_error()
 
+from transformers import TextStreamer
 
 @dataclass
 class ProgramArgs:
@@ -51,7 +52,7 @@ class ProgramArgs:
 
     # Path to cache directory
     cachedir: str = "saved/room0"
-    
+
     prompts_path: str = "prompts/gpt_prompts.json"
 
     # Path to map file
@@ -78,27 +79,29 @@ class ProgramArgs:
     # Masking option
     masking_option: Literal["blackout", "red_outline", "none"] = "none"
 
-    #llm type
+    # llm type
     llm_type: str = "vicuna"
+
 
 def load_scene_map(args, scene_map):
     """
     Loads a scene map from a gzip-compressed pickle file. This is a function because depending whether the mapfile was made using cfslam_pipeline_batch.py or merge_duplicate_objects.py, the file format is different (see below). So this function handles that case.
-    
+
     The function checks the structure of the deserialized object to determine
     the correct way to load it into the `scene_map` object. There are two
     expected formats:
     1. A dictionary containing an "objects" key.
     2. A list or a dictionary (replace with your expected type).
     """
-    
+
     with gzip.open(Path(args.mapfile), "rb") as f:
         loaded_data = pkl.load(f)
-        
+
         # Check the type of the loaded data to decide how to proceed
         if isinstance(loaded_data, dict) and "objects" in loaded_data:
             scene_map.load_serializable(loaded_data["objects"])
-        elif isinstance(loaded_data, list) or isinstance(loaded_data, dict):  # Replace with your expected type
+        # Replace with your expected type
+        elif isinstance(loaded_data, list) or isinstance(loaded_data, dict):
             scene_map.load_serializable(loaded_data)
         else:
             raise ValueError("Unexpected data format in map file.")
@@ -109,19 +112,22 @@ def prjson(input_json, indent=0):
     """ Pretty print a json object """
     if not isinstance(input_json, list):
         input_json = [input_json]
-        
+
     print("[")
     for i, entry in enumerate(input_json):
         print("  {")
         for j, (key, value) in enumerate(entry.items()):
             terminator = "," if j < len(entry) - 1 else ""
             if isinstance(value, str):
-                formatted_value = value.replace("\\n", "\n").replace("\\t", "\t")
-                print('    "{}": "{}"{}'.format(key, formatted_value, terminator))
+                formatted_value = value.replace(
+                    "\\n", "\n").replace("\\t", "\t")
+                print('    "{}": "{}"{}'.format(
+                    key, formatted_value, terminator))
             else:
                 print(f'    "{key}": {value}{terminator}')
         print("  }" + ("," if i < len(input_json) - 1 else ""))
     print("]")
+
 
 def crop_image_pil(image: Image, x1: int, y1: int, x2: int, y2: int, padding: int = 0) -> Image:
     """
@@ -155,7 +161,8 @@ def draw_red_outline(image, mask):
     red_outline = [255, 0, 0]
 
     # Find contours in the binary mask
-    contours, _ = cv2.findContours(mask.astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(mask.astype(
+        np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     # Draw red outlines around the object. The last argument "3" indicates the thickness of the outline.
     cv2.drawContours(image_np, contours, -1, red_outline, 3)
@@ -163,7 +170,7 @@ def draw_red_outline(image, mask):
     # Optionally, add padding around the object by dilating the drawn contours
     kernel = np.ones((5, 5), np.uint8)
     image_np = cv2.dilate(image_np, kernel, iterations=1)
-    
+
     image_pil = Image.fromarray(image_np)
 
     return image_pil
@@ -171,11 +178,13 @@ def draw_red_outline(image, mask):
 
 def crop_image_and_mask(image: Image, mask: np.ndarray, x1: int, y1: int, x2: int, y2: int, padding: int = 0):
     """ Crop the image and mask with some padding. I made a single function that crops both the image and the mask at the same time because I was getting shape mismatches when I cropped them separately.This way I can check that they are the same shape."""
-    
+
     image = np.array(image)
     # Verify initial dimensions
     if image.shape[:2] != mask.shape:
-        print("Initial shape mismatch: Image shape {} != Mask shape {}".format(image.shape, mask.shape))
+        print("Initial shape mismatch: Image shape {} != Mask shape {}".format(
+            image.shape, mask.shape))
+        # mask = mask.T
         return None, None
 
     # Define the cropping coordinates
@@ -192,13 +201,15 @@ def crop_image_and_mask(image: Image, mask: np.ndarray, x1: int, y1: int, x2: in
 
     # Verify cropped dimensions
     if image_crop.shape[:2] != mask_crop.shape:
-        print("Cropped shape mismatch: Image crop shape {} != Mask crop shape {}".format(image_crop.shape, mask_crop.shape))
+        print("Cropped shape mismatch: Image crop shape {} != Mask crop shape {}".format(
+            image_crop.shape, mask_crop.shape))
         return None, None
-    
+
     # convert the image back to a pil image
     image_crop = Image.fromarray(image_crop)
 
     return image_crop, mask_crop
+
 
 def blackout_nonmasked_area(image_pil, mask):
     """ Blackout the non-masked area of an image"""
@@ -212,13 +223,15 @@ def blackout_nonmasked_area(image_pil, mask):
     black_image = Image.fromarray(black_image)
     return black_image
 
+
 def plot_images_with_captions(images, captions, confidences, low_confidences, masks, savedir, idx_obj):
     """ This is debug helper function that plots the images with the captions and masks overlaid and saves them to a directory. This way you can inspect exactly what the LLaVA model is captioning which image with the mask, and the mask confidence scores overlaid."""
-    
+
     n = min(9, len(images))  # Only plot up to 9 images
     nrows = int(np.ceil(n / 3))
     ncols = 3 if n > 1 else 1
-    fig, axarr = plt.subplots(nrows, ncols, figsize=(10, 5 * nrows), squeeze=False)  # Adjusted figsize
+    fig, axarr = plt.subplots(nrows, ncols, figsize=(
+        10, 5 * nrows), squeeze=False)  # Adjusted figsize
 
     for i in range(n):
         row, col = divmod(i, 3)
@@ -228,27 +241,30 @@ def plot_images_with_captions(images, captions, confidences, low_confidences, ma
         # Apply the mask to the image
         img_array = np.array(images[i])
         if img_array.shape[:2] != masks[i].shape:
-            ax.text(0.5, 0.5, "Plotting error: Shape mismatch between image and mask", ha='center', va='center')
+            ax.text(0.5, 0.5, "Plotting error: Shape mismatch between image and mask",
+                    ha='center', va='center')
         else:
             green_mask = np.zeros((*masks[i].shape, 3), dtype=np.uint8)
-            green_mask[masks[i]] = [0, 255, 0]  # Green color where mask is True
+            # Green color where mask is True
+            green_mask[masks[i]] = [0, 255, 0]
             ax.imshow(green_mask, alpha=0.15)  # Overlay with transparency
 
         title_text = f"Caption: {captions[i]}\nConfidence: {confidences[i]:.2f}"
         if low_confidences[i]:
             title_text += "\nLow Confidence"
-        
+
         # Wrap the caption text
         wrapped_title = '\n'.join(wrap(title_text, 30))
-        
-        ax.set_title(wrapped_title, fontsize=12)  # Reduced font size for better fitting
+
+        # Reduced font size for better fitting
+        ax.set_title(wrapped_title, fontsize=12)
         ax.axis('off')
 
     # Remove any unused subplots
     for i in range(n, nrows * ncols):
         row, col = divmod(i, 3)
         axarr[row][col].axis('off')
-    
+
     plt.tight_layout()
     plt.savefig(savedir / f"{idx_obj}.png")
     plt.close()
@@ -263,7 +279,7 @@ def extract_node_captions(args):
     # Load the scene map
     scene_map = MapObjectList()
     load_scene_map(args, scene_map)
-    
+
     # Scene map is in CFSLAM format
     # keys: 'image_idx', 'mask_idx', 'color_path', 'class_id', 'num_detections',
     # 'mask', 'xyxy', 'conf', 'n_points', 'pixel_area', 'contain_number', 'clip_ft',
@@ -287,7 +303,6 @@ def extract_node_captions(args):
 
     # Initialize LLaVA chat
     chat = LLaVaChat()
-    # chat = LLaVaChat(chat_args)
     print("LLaVA chat initialized...")
     query = "Describe the central object in the image whish was in room."
     # query = "Describe the object in the image that is outlined in red."
@@ -307,7 +322,7 @@ def extract_node_captions(args):
         conf = np.array(conf)
         idx_most_conf = np.argsort(conf)[::-1]
         # print(obj)
-        conf = np.array(obj["pixel_area"])
+        # conf = np.array(obj["pixel_area"])
         idx_most_conf = np.argsort(conf)[::-1]
         # print(conf[idx_most_conf[:10]])
         # if args['conf'] == 'mask_area':
@@ -322,31 +337,34 @@ def extract_node_captions(args):
         features = []
         captions = []
         low_confidences = []
-        
+
         image_list = []
         caption_list = []
         confidences_list = []
         low_confidences_list = []
         mask_list = []  # New list for masks
         if len(idx_most_conf) < 2:
-            continue 
+            continue
         idx_most_conf = idx_most_conf[:args.max_detections_per_object]
 
         for idx_det in tqdm(idx_most_conf):
             # image = Image.open(correct_path).convert("RGB")
             image = Image.open(obj["color_path"][idx_det]).convert("RGB")
-            xyxy = obj["xyxy"][idx_det]
+            # xyxy = obj["xyxy"][idx_det]
             class_id = obj["class_id"][idx_det]
             class_name = class_names[class_id]
             # Retrieve and crop mask
             mask = obj["mask"][idx_det]
 
             padding = 10
-            x1, y1, x2, y2 = xyxy
+
+            x1, y1, x2, y2 = get_xyxy_from_mask(mask)
             # image_crop = crop_image_pil(image, x1, y1, x2, y2, padding=padding)
-            image_crop, mask_crop = crop_image_and_mask(image, mask, x1, y1, x2, y2, padding=padding)
+            image_crop, mask_crop = crop_image_and_mask(
+                image, mask, x1, y1, x2, y2, padding=padding)
             if args.masking_option == "blackout":
-                image_crop_modified = blackout_nonmasked_area(image_crop, mask_crop)
+                image_crop_modified = blackout_nonmasked_area(
+                    image_crop, mask_crop)
             elif args.masking_option == "red_outline":
                 image_crop_modified = draw_red_outline(image_crop, mask_crop)
             else:
@@ -361,21 +379,22 @@ def extract_node_captions(args):
             else:
                 low_confidences.append(False)
 
-            # image_tensor = chat.image_processor.preprocess(image_crop, return_tensors="pt")["pixel_values"][0]
+            image_tensor = chat.image_processor.preprocess(
+                image_crop, return_tensors="pt")["pixel_values"][0]
             image_features = chat.preprocess_image([image_crop_modified])
 
-            #image_features = chat.encode_image(image_tensor[None, ...].half().cuda())
+            # image_features = chat.encode_image(image_tensor[None, ...].half().cuda())
             features.append(image_features.detach().cpu())
 
-            chat.reset()
+            # chat.reset()
             console.print("[bold red]User:[/bold red] " + query)
-            outputs = chat(query=query, image_features=image_features)
+            outputs = chat(query=query, image_features=image_features, image_sizes=[image_crop.size])
             console.print("[bold green]LLaVA:[/bold green] " + outputs)
             captions.append(outputs)
-        
+
             # print(f"Line 274, obj['mask'][idx_det].shape: {obj['mask'][idx_det].shape}")
             # print(f"Line 276, image.size: {image.size}")
-            
+
             # For the LLava debug folder
             conf_value = conf[idx_det]
             image_list.append(image_crop)
@@ -398,16 +417,18 @@ def extract_node_captions(args):
 
         # Save the feature descriptors
         torch.save(features, savedir_feat / f"{idx_obj}.pt")
-        
+
         # Again for the LLava debug folder
         if len(image_list) > 0:
-            plot_images_with_captions(image_list, caption_list, confidences_list, low_confidences_list, mask_list, savedir_debug, idx_obj)
+            plot_images_with_captions(image_list, caption_list, confidences_list,
+                                      low_confidences_list, mask_list, savedir_debug, idx_obj)
 
     # Save the captions
-    # Remove the "The central object in the image is " prefix from 
+    # Remove the "The central object in the image is " prefix from
     # the captions as it doesnt convey and actual info
     for item in caption_dict_list:
-        item["captions"] = [caption.replace("The central object in the image is ", "") for caption in item["captions"]]
+        item["captions"] = [caption.replace(
+            "The central object in the image is ", "") for caption in item["captions"]]
     # Save the captions to a json file
     with open(Path(args.cachedir) / "cfslam_llava_captions.json", "w", encoding="utf-8") as f:
         json.dump(caption_dict_list, f, indent=4, sort_keys=False)
@@ -416,6 +437,21 @@ def extract_node_captions(args):
 def save_json_to_file(json_str, filename):
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(json_str, f, indent=4, sort_keys=False)
+
+
+def get_xyxy_from_mask(mask):
+    # Находим индексы ненулевых элементов в маске
+    non_zero_indices = np.nonzero(mask)
+
+    if non_zero_indices[0].sum() == 0:
+        return (0, 0, 0, 0)
+    # Извлекаем минимальное и максимальное значение индексов по осям x и y
+    x_min = np.min(non_zero_indices[1])
+    y_min = np.min(non_zero_indices[0])
+    x_max = np.max(non_zero_indices[1])
+    y_max = np.max(non_zero_indices[0])
+
+    return (x_min, y_min, x_max, y_max)
 
 
 def refine_node_captions(args):
@@ -463,8 +499,8 @@ def refine_node_captions(args):
     for _i in trange(len(captions)):
         if len(captions[_i]) == 0:
             continue
-        
-        # Prepare the object prompt 
+
+        # Prepare the object prompt
         _dict = {}
         _caption = captions[_i]
         _bbox = scene_map[_i]["bbox"]
@@ -475,7 +511,7 @@ def refine_node_captions(args):
         _dict["captions"] = _caption["captions"]
         # _dict["low_confidences"] = _caption["low_confidences"]
         # Convert to printable string
-        
+
         # Make and format the full prompt
         preds = json.dumps(_dict, indent=0)
 
@@ -502,36 +538,39 @@ def refine_node_captions(args):
             except:
                 print("Can't parse")
                 _dict["response"] = "FAIL"
-                save_json_to_file(_dict, responses_savedir / f"{_caption['id']}.json")
+                save_json_to_file(_dict, responses_savedir /
+                                  f"{_caption['id']}.json")
                 responses.append(json.dumps(_dict))
                 continue
         else:
             raise NotImplementedError
-        
+
         elapsed_time = time.time() - start_time
         if args.llm_type == "gpt4" and elapsed_time > TIMEOUT:
             print("Timed out exceeded!")
             _dict["response"] = "FAIL"
             # responses.append('{"object_tag": "FAIL"}')
-            save_json_to_file(_dict, responses_savedir / f"{_caption['id']}.json")
+            save_json_to_file(_dict, responses_savedir /
+                              f"{_caption['id']}.json")
             responses.append(json.dumps(_dict))
             unsucessful_responses += 1
             continue
-        
+
         # count unsucessful responses
         if args.llm_type == "gpt4" and \
-            "invalid" in chat_completion["choices"][0]["message"]["content"].strip("\n"):
+                "invalid" in chat_completion["choices"][0]["message"]["content"].strip("\n"):
             unsucessful_responses += 1
-        
+
         # print output
         if args.llm_type == "gpt4":
             prjson([{"role": "user", "content": preds}])
             print(chat_completion["choices"][0]["message"]["content"])
             print(f"Unsucessful responses so far: {unsucessful_responses}")
-            _dict["response"] = chat_completion["choices"][0]["message"]["content"].strip("\n")
+            _dict["response"] = chat_completion["choices"][0]["message"]["content"].strip(
+                "\n")
         elif args.llm_type == "vicuna":
             print(out)
-        
+
         # save the response
         responses.append(json.dumps(_dict))
         save_json_to_file(_dict, responses_savedir / f"{_caption['id']}.json")
@@ -588,7 +627,7 @@ def extract_object_tag_from_json_str(json_str):
 
 def build_scenegraph(args):
     if args.llm_type == "gpt4":
-    # Import OpenAI API
+        # Import OpenAI API
         import openai
         openai.api_key = os.getenv("OPENAI_API_KEY")
     elif args.llm_type == "vicuna":
@@ -596,7 +635,6 @@ def build_scenegraph(args):
         url = "http://127.0.0.1:8080/generate"
     else:
         raise NotImplementedError
-
 
     from conceptgraph.slam.slam_classes import MapObjectList
     from conceptgraph.slam.utils import compute_overlap_matrix
@@ -608,9 +646,9 @@ def build_scenegraph(args):
     response_dir = Path(args.cachedir) / "cfslam_gpt-4_responses"
     responses = []
     object_tags = []
-    also_indices_to_remove = [] # indices to remove if the json file does not exist
+    also_indices_to_remove = []  # indices to remove if the json file does not exist
     for idx in range(len(scene_map)):
-        # check if the json file exists first 
+        # check if the json file exists first
         if not (response_dir / f"{idx}.json").exists():
             also_indices_to_remove.append(idx)
             continue
@@ -650,7 +688,8 @@ def build_scenegraph(args):
     #     object_tags.append(_d["object_tag"])
 
     # Remove segments that correspond to "invalid" tags
-    indices_to_remove = [i for i in range(len(responses)) if object_tags[i].lower() in ["fail", "invalid"]]
+    indices_to_remove = [i for i in range(
+        len(responses)) if object_tags[i].lower() in ["fail", "invalid"]]
     # Also remove segments that do not have a minimum number of observations
     indices_to_remove = set(indices_to_remove)
     for obj_idx in range(len(scene_map)):
@@ -661,20 +700,21 @@ def build_scenegraph(args):
     indices_to_remove = list(indices_to_remove)
     # combine with also_indices_to_remove and sort the list
     indices_to_remove = list(set(indices_to_remove + also_indices_to_remove))
-    
+
     # List of tags in original scene map that are in the pruned scene map
-    segment_ids_to_retain = [i for i in range(len(scene_map)) if i not in indices_to_remove]
+    segment_ids_to_retain = [i for i in range(
+        len(scene_map)) if i not in indices_to_remove]
     with open(Path(args.cachedir) / "cfslam_scenegraph_invalid_indices.pkl", "wb") as f:
         pkl.dump(indices_to_remove, f)
     print(f"Removed {len(indices_to_remove)} segments")
-    
+
     # Filtering responses based on segment_ids_to_retain
-    responses = [resp for resp in responses if resp['id'] in segment_ids_to_retain]
+    responses = [resp for resp in responses if resp['id']
+                 in segment_ids_to_retain]
 
     # Assuming each response dictionary contains an 'object_tag' key for the object tag.
     # Extract filtered object tags based on filtered_responses
     object_tags = [resp['response']['object_tag'] for resp in responses]
-
 
     pruned_scene_map = []
     pruned_object_tags = []
@@ -717,7 +757,8 @@ def build_scenegraph(args):
                 rows.append(j)
                 cols.append(i)
 
-    adjacency_matrix = csr_matrix((weights, (rows, cols)), shape=(num_segments, num_segments))
+    adjacency_matrix = csr_matrix(
+        (weights, (rows, cols)), shape=(num_segments, num_segments))
 
     # Find the minimum spanning tree of the weighted adjacency matrix
     mst = minimum_spanning_tree(adjacency_matrix)
@@ -744,7 +785,8 @@ def build_scenegraph(args):
         for label in range(labels.max() + 1):
             component_indices = np.where(labels == label)[0]
             # Extract the subgraph for the connected component
-            subgraph = adjacency_matrix[component_indices][:, component_indices]
+            subgraph = adjacency_matrix[component_indices][:,
+                                                           component_indices]
             # Find the minimum spanning tree of the connected component subgraph
             _mst = minimum_spanning_tree(subgraph)
             # Add the minimum spanning tree to the list
@@ -757,7 +799,8 @@ def build_scenegraph(args):
                 if len(component) <= 1:
                     continue
                 for u, v in zip(
-                    minimum_spanning_trees[componentidx].nonzero()[0], minimum_spanning_trees[componentidx].nonzero()[1]
+                    minimum_spanning_trees[componentidx].nonzero(
+                    )[0], minimum_spanning_trees[componentidx].nonzero()[1]
                 ):
                     segmentidx1 = component[u]
                     segmentidx2 = component[v]
@@ -778,7 +821,8 @@ def build_scenegraph(args):
                             "object_tag": object_tags[segmentidx2],
                         },
                     }
-                    print(f"{input_dict['object1']['object_tag']}, {input_dict['object2']['object_tag']}")
+                    print(
+                        f"{input_dict['object1']['object_tag']}, {input_dict['object2']['object_tag']}")
 
                     relation_queries.append(input_dict)
 
@@ -814,10 +858,11 @@ def build_scenegraph(args):
                         chat_completion = openai.ChatCompletion.create(
                             # model="gpt-3.5-turbo",
                             model="gpt-4",
-                            messages=[{"role": "user", "content": DEFAULT_PROMPT + "\n\n" + input_json_str}],
+                            messages=[
+                                {"role": "user", "content": DEFAULT_PROMPT + "\n\n" + input_json_str}],
                             timeout=TIMEOUT,  # Timeout in seconds
                         )
-                    
+
                         elapsed_time = time.time() - start_time
                         if elapsed_time > TIMEOUT:
                             print("Timed out exceeded!")
@@ -826,7 +871,8 @@ def build_scenegraph(args):
                         else:
                             try:
                                 # Attempt to parse the output as a JSON
-                                chat_output_json = json.loads(chat_completion["choices"][0]["message"]["content"])
+                                chat_output_json = json.loads(
+                                    chat_completion["choices"][0]["message"]["content"])
                                 # If the output is a valid JSON, then add it to the output dictionary
                                 output_dict["object_relation"] = chat_output_json["object_relation"]
                                 output_dict["reason"] = chat_output_json["reason"]
@@ -835,12 +881,14 @@ def build_scenegraph(args):
                                 output_dict["reason"] = "FAIL"
                         relations.append(output_dict)
                     elif args.llm_type == "vicuna":
-                        curr_chat_messages = DEFAULT_PROMPT + str(input_json_str) + "\n Assistant answer:"
+                        curr_chat_messages = DEFAULT_PROMPT + \
+                            str(input_json_str) + "\n Assistant answer:"
                         inputs = {"prompt": curr_chat_messages}
                         outputs = requests.post(url, json=inputs)
                         output_dict["object_relation"] = "FAIL"
                         try:
-                            out = eval(outputs.json()["text"].replace('\\', ""))
+                            out = eval(outputs.json()[
+                                       "text"].replace('\\', ""))
                             print("Answer:")
                             print(out)
                             print("----")
@@ -863,7 +911,8 @@ def build_scenegraph(args):
             with open(Path(args.cachedir) / "cfslam_object_relations.json", "w") as f:
                 json.dump(relations, f, indent=4)
         else:
-            relations = json.load(open(Path(args.cachedir) / "cfslam_object_relations.json", "r"))
+            relations = json.load(
+                open(Path(args.cachedir) / "cfslam_object_relations.json", "r"))
 
     scenegraph_edges = []
 
@@ -872,15 +921,18 @@ def build_scenegraph(args):
         if len(component) <= 1:
             continue
         for u, v in zip(
-            minimum_spanning_trees[componentidx].nonzero()[0], minimum_spanning_trees[componentidx].nonzero()[1]
+            minimum_spanning_trees[componentidx].nonzero(
+            )[0], minimum_spanning_trees[componentidx].nonzero()[1]
         ):
             segmentidx1 = component[u]
             segmentidx2 = component[v]
             # print(f"{segmentidx1}, {segmentidx2}, {relations[_idx]['object_relation']}")
             if relations[_idx]["object_relation"] != "none of these":
-                scenegraph_edges.append((segmentidx1, segmentidx2, relations[_idx]["object_relation"]))
+                scenegraph_edges.append(
+                    (segmentidx1, segmentidx2, relations[_idx]["object_relation"]))
             _idx += 1
-    print(f"Created 3D scenegraph with {num_segments} nodes and {len(scenegraph_edges)} edges")
+    print(
+        f"Created 3D scenegraph with {num_segments} nodes and {len(scenegraph_edges)} edges")
 
     with open(Path(args.cachedir) / "cfslam_scenegraph_edges.pkl", "wb") as f:
         pkl.dump(scenegraph_edges, f)
@@ -888,7 +940,6 @@ def build_scenegraph(args):
 
 def generate_scenegraph_json(args):
     from conceptgraph.slam.slam_classes import MapObjectList
-    
 
     # Generate the JSON file summarizing the scene, if it doesn't exist already
     # or if the --recopmute_scenegraph_json flag is set
@@ -917,7 +968,8 @@ def generate_scenegraph_json(args):
 
 def display_images(image_list):
     num_images = len(image_list)
-    cols = 2  # Number of columns for the subplots (you can change this as needed)
+    # Number of columns for the subplots (you can change this as needed)
+    cols = 2
     rows = (num_images + cols - 1) // cols
 
     _, axes = plt.subplots(rows, cols, figsize=(10, 5))
@@ -949,7 +1001,8 @@ def annotate_scenegraph(args):
     # annotate the objects that are specified in the annot_inds list
     annots = []
     if annot_inds is not None:
-        annots = json.load(open(Path(args.cachedir) / "annotated_scenegraph.json", "r"))
+        annots = json.load(
+            open(Path(args.cachedir) / "annotated_scenegraph.json", "r"))
 
     if annot_inds is None:
         annot_inds = list(range(len(scene_map)))
@@ -980,7 +1033,8 @@ def annotate_scenegraph(args):
             padding = 10
             x1, y1, x2, y2 = xyxy
             image_crop = crop_image_pil(image, x1, y1, x2, y2, padding=padding)
-            mask_crop = crop_image_pil(Image.fromarray(mask), x1, y1, x2, y2, padding=padding)
+            mask_crop = crop_image_pil(Image.fromarray(
+                mask), x1, y1, x2, y2, padding=padding)
             mask_crop = np.array(mask_crop)[..., None]
             mask_crop[mask_crop == 0] = 0.05
             image_crop = np.array(image_crop) * mask_crop
@@ -1019,7 +1073,7 @@ def annotate_scenegraph(args):
 def main():
     # Process command-line args (if any)
     args = tyro.cli(ProgramArgs)
-    
+
     # print using masking option
     print(f"args.masking_option: {args.masking_option}")
 

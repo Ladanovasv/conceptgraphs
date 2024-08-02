@@ -47,9 +47,6 @@ from conceptgraph.slam.mapping import (
     aggregate_similarities,
     merge_detections_to_objects
 )
-import sys
-
-sys.path.append("/home/docker_user/concept-graphs/conceptgraph/pytorch3d/pytorch3d/")
 
 BG_CLASSES = ["wall", "floor", "ceiling"]
 
@@ -140,7 +137,7 @@ def main(cfg : DictConfig):
     
     classes, class_colors = create_or_load_colors(cfg, cfg.color_file_name)
 
-    objects = MapObjectList()
+    objects = MapObjectList(device=cfg.device)
     
     if not cfg.skip_bg:
         # Handle the background detection separately 
@@ -154,7 +151,7 @@ def main(cfg : DictConfig):
     # For visualization
     if cfg.vis_render:
         view_param = o3d.io.read_pinhole_camera_parameters(cfg.render_camera_path)
-            
+        print(cfg.render_camera_path)    
         obj_renderer = OnlineObjectRenderer(
             view_param = view_param,
             base_objects = None, 
@@ -230,6 +227,7 @@ def main(cfg : DictConfig):
         # else:
         #     continue
         
+        #print(gobs['image_feats'].shape)
         fg_detection_list, bg_detection_list = gobs_to_detection_list(
             cfg = cfg,
             image = image_rgb,

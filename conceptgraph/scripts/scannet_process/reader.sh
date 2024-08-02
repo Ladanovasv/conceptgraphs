@@ -1,0 +1,8 @@
+python reader.py --filename /datasets/Scannet/scans/scene0011_00/scene0011_00.sens --output_path  /datasets/Scannet/scans/scene0011_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0030_00/scene0030_00.sens --output_path  /datasets/Scannet/scans/scene0030_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0046_00/scene0046_00.sens --output_path  /datasets/Scannet/scans/scene0046_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0086_00/scene0086_00.sens --output_path  /datasets/Scannet/scans/scene0086_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0222_00/scene0222_00.sens --output_path  /datasets/Scannet/scans/scene0222_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0378_00/scene0378_00.sens --output_path  /datasets/Scannet/scans/scene0378_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0389_00/scene0389_00.sens --output_path  /datasets/Scannet/scans/scene0389_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics
+python reader.py --filename /datasets/Scannet/scans/scene0435_00/scene0435_00.sens --output_path  /datasets/Scannet/scans/scene0435_00/ --export_depth_images --export_color_images --export_poses --export_intrinsics

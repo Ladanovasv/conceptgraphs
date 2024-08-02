@@ -18,5 +18,5 @@ docker run -itd --rm \
            -v $CODE:/home/docker_user/concept-graphs:rw \
            -v $DATA_PATH:/datasets/:rw \
            --name ladanova_concept_graphs \
-           concept_graphs:latest
+           concept_graphs_old:latest
 xhost -

@@ -18,8 +18,7 @@ import distinctipy
 from gradslam.structures.pointclouds import Pointclouds
 
 from conceptgraph.slam.slam_classes import MapObjectList
-from conceptgraph.utils.vis import LineMesh
-from conceptgraph.slam.utils import filter_objects, merge_objects
+
 
 def create_ball_mesh(center, radius, color=(0, 1, 0)):
     """
@@ -312,15 +311,11 @@ def main(args):
     def save_view_params(vis):
         param = vis.get_view_control().convert_to_pinhole_camera_parameters()
         o3d.io.write_pinhole_camera_parameters("temp.json", param)
-        
     vis.register_key_callback(ord("B"), toggle_bg_pcd)
     vis.register_key_callback(ord("S"), toggle_global_pcd)
-    vis.register_key_callback(ord("C"), color_by_class)
     vis.register_key_callback(ord("R"), color_by_rgb)
     vis.register_key_callback(ord("F"), color_by_clip_sim)
     vis.register_key_callback(ord("I"), color_by_instance)
-    vis.register_key_callback(ord("V"), save_view_params)
-    vis.register_key_callback(ord("G"), toggle_scene_graph)
     
     # Render the scene
     vis.run()

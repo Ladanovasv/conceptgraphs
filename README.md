@@ -415,3 +415,7 @@ python scripts/generate_ai2thor_dataset.py \
     --randomize_move_moveable_ratio $MOVE_RATIO \
     --randomize_move_pickupable_ratio $MOVE_RATIO
 ```
+
+pip install chardet
+cd /home/docker_user/Grounded-Segment-Anything/GroundingDINO/
+wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
